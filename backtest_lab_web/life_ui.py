@@ -1,7 +1,18 @@
 """Streamlit UI for Life Portfolio. Profile and psychology are separate forms."""
 import streamlit as st
 import pandas as pd
-from life_portfolio import QUESTIONS, AXES, validate_profile, finance_snapshot, score_answers, interpret
+import re
+from life_portfolio import QUESTIONS, AXES, validate_profile, finance_snapshot, score_answers, interpret, portfolio_candidates
+
+
+def amount(label,key,default):
+    if key not in st.session_state:
+        st.session_state[key]=f'{default:,}'
+    raw=st.text_input(label,key=key,help='원 단위 · 쉼표로 구분하여 입력')
+    if not re.fullmatch(r'\d[\d,]*',raw.strip()):
+        st.error(f'{label}: 숫자를 입력해 주세요.')
+        return None
+    return int(raw.replace(',',''))
 
 
 def render():
@@ -18,19 +29,22 @@ def render():
                 marital=st.selectbox('혼인 상태',['미혼','기혼','기타/응답하지 않음'])
                 dependents=st.number_input('부양가족 수 (배우자 제외)',0,30,0)
                 goal_years=st.number_input('주요 투자 목표까지 남은 기간 (년)',1,60,10)
-                income=st.number_input('본인 월 실수령액 (원)',min_value=0,step=100000,value=3500000)
-                partner_income=st.number_input('배우자 월 실수령액 (원, 해당 없으면 0)',min_value=0,step=100000,value=0)
+                income=amount('본인 월 실수령액 (원)','life_income',3500000)
+                partner_income=amount('배우자 월 실수령액 (원, 해당 없으면 0)','life_partner_income',0)
             with b:
-                expenses=st.number_input('월 생활비·고정지출 (대출·부양비 제외, 원)',min_value=0,step=100000,value=1500000)
-                debt_payment=st.number_input('월 대출 원리금 상환액 (원)',min_value=0,step=100000,value=0)
-                support=st.number_input('월 가족·부모 부양비 (원)',min_value=0,step=100000,value=0)
-                cash=st.number_input('현금성 자산 (원)',min_value=0,step=1000000,value=10000000)
-                investments=st.number_input('기존 금융투자 자산 (원)',min_value=0,step=1000000,value=0)
-                debt=st.number_input('총 부채 잔액 (원)',min_value=0,step=1000000,value=0)
+                expenses=amount('월 생활비·고정지출 (대출·부양비 제외, 원)','life_expenses',1500000)
+                debt_payment=amount('월 대출 원리금 상환액 (원)','life_debt_payment',0)
+                support=amount('월 가족·부모 부양비 (원)','life_support',0)
+                cash=amount('현금성 자산 (원)','life_cash',10000000)
+                investments=amount('기존 금융투자 자산 (원)','life_investments',0)
+                debt=amount('총 부채 잔액 (원)','life_debt',0)
             goals=st.multiselect('향후 주요 계획 (선택)', ['결혼','출산·육아','주택 구매·이사','자녀 교육','부모 부양','이직·휴직','은퇴','기타'])
-            goal_amount=st.number_input('목표에 필요한 금액 (원, 모르면 0)',min_value=0,step=1000000,value=0)
+            goal_amount=amount('목표에 필요한 금액 (원, 모르면 0)','life_goal_amount',0)
             submitted=st.form_submit_button('재무정보 검증 및 저장',type='primary')
         if submitted:
+            if any(x is None for x in (income,partner_income,expenses,debt_payment,support,cash,investments,debt,goal_amount)):
+                st.error('금액 입력값을 확인하세요.')
+                st.stop()
             profile=dict(age=age,marital=marital,dependents=dependents,goal_years=goal_years,income=income,partner_income=partner_income if marital=='기혼' else 0,
                          expenses=expenses,debt_payment=debt_payment,support=support,cash=cash,investments=investments,debt=debt,goals=goals,goal_amount=goal_amount)
             errors=validate_profile(profile)
@@ -48,7 +62,7 @@ def render():
             st.caption('잉여현금은 입력된 월 소득에서 지출·대출상환·부양비를 뺀 값이며 실제 투자 가능액을 보장하지 않습니다.')
     with tab2:
         st.subheader('독립적인 투자 성향 검사')
-        st.write('총 16문항 · 각 문항에 1~5점으로 응답하세요. 1점은 전혀 그렇지 않다, 5점은 매우 그렇다입니다.')
+        st.write('총 16문항 · 일상 상황을 상상하면서 답해 보세요. 1점은 전혀 그렇지 않다, 5점은 매우 그렇다입니다.')
         st.caption('재무정보는 이 검사 점수에 반영하지 않습니다. 이 검사는 자체 제작한 자가평가 설문으로 심리측정학적 타당성이 검증되지 않았습니다.')
         with st.form('life_psych_form'):
             answers={}
@@ -85,13 +99,20 @@ def render():
         else:st.info('현금흐름과 비상자금은 입력값 기준으로 계산되었습니다. 보험·세금·비정기 지출 등을 추가 검토해야 합니다.')
         if p['goal_years']<=3 or p['goal_amount']>0:
             st.warning('가까운 목표 또는 목돈 계획이 있습니다. 사용 시점이 정해진 자금은 장기 위험자산과 분리해 검토하세요.')
+        st.subheader('자산배분 후보 비교 (교육용 예시)')
+        candidates=portfolio_candidates(p,scores)
+        st.info(f"분석 방향: **{candidates['model']}** · 실제 상품 매수 추천이 아닌 자산군 배분 예시입니다.")
+        for reason in candidates['reasons']:
+            st.warning(reason)
+        st.dataframe(pd.DataFrame(candidates['examples']).style.format({'주식':'{}%','채권':'{}%','현금성':'{}%'}),hide_index=True,use_container_width=True)
+        st.caption('위 비중은 검증된 개인별 최적 비중이 아닙니다. 주식·채권·현금성 자산의 교육용 비교안이며, 단기 목표자금과 비상자금은 별도로 확보해야 합니다. 특정 ETF 자동 매수 권유는 제공하지 않습니다.')
         st.subheader('검사 결과와 재무정보를 함께 보는 방법')
         st.write('심리적 위험 수용도와 실제 재무적 손실 감내 능력은 별개입니다. 지금은 두 결과를 나란히 보여주며 특정 ETF·주식 비중을 자동 추천하지 않습니다.')
         st.dataframe(pd.DataFrame([{'평가 항목':'심리적 위험 수용도','결과':f'{scores["risk"]:.0f}/100'},
                                   {'평가 항목':'월 잉여현금','결과':f'{snap["monthly_surplus"]:,.0f}원'},
                                   {'평가 항목':'주요 목표까지','결과':f'{p["goal_years"]}년'},
                                   {'평가 항목':'목표 필요금액','결과':f'{p["goal_amount"]:,.0f}원'}]),hide_index=True,use_container_width=True)
-        st.caption('v1.6에서 재무 안전성 평가 기준을 검증하고, v1.7에서 적합성 제약을 반영한 자산배분 후보 및 백테스트 연계를 구현할 예정입니다.')
+        st.caption('v1.6: 자산군 비교 후보 추가. 실제 투자 상품 추천·기존 백테스트 자동 연결은 추후 검증 후 구현 예정입니다.')
         if st.button('현재 Life Portfolio 세션 데이터 삭제'):
             for k in list(st.session_state):
                 if k.startswith('life_'):del st.session_state[k]
