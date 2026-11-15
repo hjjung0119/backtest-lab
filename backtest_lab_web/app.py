@@ -9,7 +9,33 @@ from engine import backtest, common_date_timing
 from search import find_tickers, CATALOG
 
 st.set_page_config(page_title='Backtest Lab | 주식 백테스팅', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
-st.markdown('''<style>.block-container{max-width:1200px;padding-top:1.3rem} [data-testid="stMetric"]{background:#f1f5f9;border-radius:12px;padding:14px} @media(max-width:700px){.block-container{padding:1rem .7rem 2rem}}</style>''',unsafe_allow_html=True)
+st.markdown("""<style>
+.block-container {max-width:1200px;padding-top:1.3rem}
+/* Metric cards must remain legible even when Streamlit's theme config is missing. */
+[data-testid="stMetric"] {
+  background-color:#172235 !important;
+  border:1px solid #334155 !important;
+  border-radius:14px !important;
+  padding:16px 18px !important;
+  min-height:108px;
+}
+[data-testid="stMetric"] [data-testid="stMetricLabel"],
+[data-testid="stMetric"] [data-testid="stMetricLabel"] * {
+  color:#cbd5e1 !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricValue"],
+[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+  color:#f8fafc !important;
+  opacity:1 !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+  opacity:1 !important;
+}
+@media(max-width:700px) {
+  .block-container {padding:1rem .7rem 2rem}
+  [data-testid="stMetric"] {padding:12px !important;min-height:90px}
+}
+</style>""",unsafe_allow_html=True)
 
 @st.cache_data(ttl=3600,show_spinner=False)
 def search_cached(q): return find_tickers(q)
