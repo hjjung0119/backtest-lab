@@ -5,24 +5,7 @@ Scores are descriptive and NOT validated psychometric or investment suitability 
 from dataclasses import dataclass
 from typing import Mapping
 
-QUESTIONS = [
- ('risk','보유 투자자산이 20% 하락해도 계획을 유지할 수 있다.'),
- ('risk','단기간 손실 가능성이 있어도 장기 수익 기회를 추구한다.'),
- ('risk','자산가격의 큰 변동을 감정적으로 견딜 수 있다.'),
- ('risk','투자 원금의 일시적인 감소를 받아들일 수 있다.'),
- ('discipline','투자 전 정한 매수·매도 기준을 지킨다.'),
- ('discipline','급격한 뉴스에도 즉흥적인 매매를 자제한다.'),
- ('discipline','투자 성과를 정기적으로 점검하되 잦은 매매는 피한다.'),
- ('discipline','투자 실패 원인을 기록하고 계획을 수정한다.'),
- ('horizon','단기 수익보다 장기적인 자산 성장을 중시한다.'),
- ('horizon','몇 년간 성과가 부진해도 투자 원칙을 유지할 수 있다.'),
- ('horizon','장기 목표를 위해 단기 소비를 미룰 수 있다.'),
- ('horizon','자산을 평가할 때 1개월보다 5년 이상의 성과를 중시한다.'),
- ('knowledge','분산투자가 개별 종목 위험을 줄이는 원리를 설명할 수 있다.'),
- ('knowledge','채권과 주식의 가격 변동 특성을 구분할 수 있다.'),
- ('knowledge','환율 변동이 해외투자 원화 수익률에 미치는 영향을 이해한다.'),
- ('knowledge','레버리지 ETF의 장기 보유 위험을 이해한다.'),
-]
+QUESTIONS = [('risk', '10년 뒤 사용할 투자금이 1년 만에 25% 줄었다면, 나는 당장 팔기보다 계획을 다시 확인할 것이다.'), ('risk', '안정적인 연 3%와 손실 가능성이 있지만 더 높은 수익 기회 중 후자에 더 끌린다.'), ('risk', '주변 사람들이 주식시장이 위험하다고 말해도 내 투자 기간에 맞춰 판단할 수 있다.'), ('risk', '내가 가진 주식이 며칠 사이 크게 흔들려도 잠을 설치지는 않을 것 같다.'), ('discipline', '좋아하는 종목이 급등할 때도 사전에 정한 투자 비중을 지키는 편이다.'), ('discipline', '친구가 큰돈을 벌었다는 소식을 들어도 바로 따라 사지는 않는다.'), ('discipline', '주가가 떨어지면 뉴스만 보고 즉시 행동하기보다 투자 이유가 달라졌는지 살펴본다.'), ('discipline', '투자 결과가 예상과 다를 때 감정보다 기록과 근거를 먼저 확인한다.'), ('horizon', '지금 당장 보상이 작더라도 10년 뒤 더 큰 결과를 얻는 선택이 마음에 든다.'), ('horizon', '내가 투자한 자산이 2~3년 제자리여도 장기 계획을 유지할 수 있다.'), ('horizon', '1년 뒤 쓸 돈과 10년 뒤 쓸 돈은 서로 다르게 운용해야 한다고 생각한다.'), ('horizon', '투자 성과를 볼 때 이번 달보다 지난 몇 년간의 흐름이 더 중요하다.'), ('knowledge', '주식 여러 종목에 나누어 투자해도 시장 전체가 하락하면 손실을 볼 수 있음을 안다.'), ('knowledge', '채권도 금리 변화에 따라 가격이 하락할 수 있음을 알고 있다.'), ('knowledge', '미국 주식이 달러로 올라도 원화 환산 수익률은 환율 때문에 낮아질 수 있음을 안다.'), ('knowledge', '레버리지 ETF는 지수의 장기 누적 수익률을 단순히 배수로 따라가지 않을 수 있음을 안다.')]
 AXES = {'risk':'심리적 위험 수용도','discipline':'투자 원칙 유지','horizon':'장기 투자 선호','knowledge':'투자 이해도(자가평가)'}
 
 
@@ -69,3 +52,33 @@ def interpret(scores: Mapping) -> str:
     if risk < 35:return '안정 선호형'
     if risk < 70:return '균형 탐색형'
     return '성장 선호형'
+
+
+def portfolio_candidates(profile, scores):
+    """Educational asset-class examples, not personalized securities advice."""
+    snap=finance_snapshot(profile)
+    reasons=[]
+    if snap['monthly_surplus']<=0:reasons.append('월 잉여현금이 0원 이하입니다. 신규 투자보다 현금흐름 점검이 우선입니다.')
+    if snap['reserve_months'] is None:reasons.append('월 지출이 0원으로 입력되어 비상자금 개월 수를 계산할 수 없습니다.')
+    elif snap['reserve_months']<6:reasons.append('비상자금이 월 지출 6개월분 미만입니다. 예시 기준으로 우선 확보를 검토하세요.')
+    if profile['goal_years']<=3:reasons.append('목표 기간이 3년 이하입니다. 목표자금은 변동성이 큰 자산과 분리해 검토하세요.')
+    if profile.get('goal_amount',0)>snap['monthly_surplus']*12*profile['goal_years']+profile['cash']:
+        reasons.append('단순 적립만으로 목표 금액이 부족할 수 있어 지출·기간·저축액을 재검토해야 합니다.')
+    if profile.get('debt',0)>0:reasons.append('대출 금리와 상환 부담을 투자 기대수익과 별도로 비교해야 합니다.')
+    # Conservative guardrails: profile capacity overrides psychological willingness.
+    constrained=(snap['monthly_surplus']<=0 or (snap['reserve_months'] is not None and snap['reserve_months']<3) or profile['goal_years']<=3)
+    if constrained:
+        model='자금 안전성 우선 검토'
+        examples=[('안정 우선 비교안',20,30,50),('균형 비교안',40,40,20)]
+    elif scores['risk']<35:
+        model='안정 선호 비교'
+        examples=[('안정 우선 비교안',20,50,30),('균형 비교안',40,40,20)]
+    elif scores['risk']<70:
+        model='균형 선호 비교'
+        examples=[('균형 비교안',50,40,10),('성장 비교안',70,25,5)]
+    else:
+        model='성장 선호 비교'
+        examples=[('균형 비교안',50,40,10),('성장 비교안',70,25,5)]
+    return {'model':model,'constrained':constrained,'reasons':reasons,
+            'examples':[{'name':name,'주식':equity,'채권':bonds,'현금성':cash} for name,equity,bonds,cash in examples],
+            'monthly_surplus':snap['monthly_surplus']}
