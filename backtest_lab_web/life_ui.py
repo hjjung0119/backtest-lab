@@ -5,19 +5,10 @@ import re
 from life_portfolio import QUESTIONS, AXES, validate_profile, finance_snapshot, score_answers, interpret, portfolio_candidates, product_portfolios
 
 
-MONEY_KEYS = ('life_income', 'life_partner_income', 'life_expenses', 'life_debt_payment',
-              'life_support', 'life_insurance', 'life_taxes', 'life_irregular',
-              'life_cash', 'life_investments', 'life_debt', 'life_goal_amount')
-
-def _format_money_on_commit(key):
-    raw=str(st.session_state.get(key,'')).strip()
-    if re.fullmatch(r'\d[\d,]*',raw):
-        st.session_state[key]=f"{int(raw.replace(',','')):,}"
-
 def amount(label,key,default):
     if key not in st.session_state:
         st.session_state[key]=f'{default:,}'
-    raw=st.text_input(label,key=key,help='원 단위 · 저장 버튼을 누르면 쉼표를 정리합니다.')
+    raw=st.text_input(label,key=key,help='원 단위 · 쉼표로 구분하여 입력')
     if not re.fullmatch(r'\d[\d,]*',raw.strip()):
         st.error(f'{label}: 숫자를 입력해 주세요.')
         return None
@@ -25,13 +16,8 @@ def amount(label,key,default):
 
 
 def render():
-    # Streamlit form widgets do not support on_change callbacks.
-    # Apply formatting before widgets are instantiated on the next rerun.
-    if st.session_state.pop('_life_format_pending', False):
-        for key in MONEY_KEYS:
-            _format_money_on_commit(key)
     st.title('🧠 Life Portfolio | 나의 투자 성향과 재무 상황')
-    st.caption('Backtest Lab v1.8 · 재무정보와 투자 성향 검사를 독립적으로 진행합니다. 현재 결과는 교육·자가점검용이며 금융상품 추천이 아닙니다.')
+    st.caption('Backtest Lab v1.7 · 재무정보와 투자 성향 검사를 독립적으로 진행합니다. 현재 결과는 교육·자가점검용이며 금융상품 추천이 아닙니다.')
     st.info('입력값과 설문 답변은 이 앱의 현재 Streamlit 세션에만 보관하도록 구현했습니다. 서버 DB에 저장하거나 외부 AI에 전송하지 않습니다. 공유 기기 사용 시 세션을 종료하세요.')
     tab1,tab2,tab3=st.tabs(['① 필수 재무정보','② 투자 성향 검사','③ 통합 결과'])
     with tab1:
@@ -59,7 +45,6 @@ def render():
             goal_amount=amount('목표에 필요한 금액 (원, 모르면 0)','life_goal_amount',0)
             submitted=st.form_submit_button('재무정보 검증 및 저장',type='primary')
         if submitted:
-            st.session_state['_life_format_pending'] = True
             if any(x is None for x in (income,partner_income,expenses,debt_payment,support,insurance,taxes,irregular,cash,investments,debt,goal_amount)):
                 st.error('금액 입력값을 확인하세요.')
                 st.stop()
@@ -94,3 +79,18 @@ def render():
                 st.session_state['life_scores']=scores
                 st.success(f'검사 완료: {interpret(scores)}')
         if 'life_scores' in st.session_state:
+            for axis,label in AXES.items():
+                score=st.session_state['life_scores'][axis]
+                st.write(f'**{label}** · {score:.1f}/100')
+                st.progress(score/100)
+    with tab3:
+        if 'life_profile' not in st.session_state or 'life_scores' not in st.session_state:
+            missing=[]
+            if 'life_profile' not in st.session_state:missing.append('재무정보')
+            if 'life_scores' not in st.session_state:missing.append('투자 성향 검사')
+            st.warning('통합 분석을 보려면 '+', '.join(missing)+'를 완료하세요.')
+            return
+        p=st.session_state['life_profile']; scores=st.session_state['life_scores']; snap=finance_snapshot(p)
+        st.subheader(f'검사 유형: {interpret(scores)}')
+        a,b,c=st.columns(3)
+        a.metric('심리적 위험 수용도',f'{scores["risk"]:.0f}/100')
