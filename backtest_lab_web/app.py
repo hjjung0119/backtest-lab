@@ -1,6 +1,7 @@
 """Backtest Lab: deployable Streamlit web app for US-listed USD securities."""
 from datetime import date, timedelta
 import re
+from html import escape
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -10,7 +11,13 @@ from search import find_tickers, CATALOG
 
 st.set_page_config(page_title='Backtest Lab | 주식 백테스팅', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
 st.markdown("""<style>
-.block-container {max-width:1200px;padding-top:1.3rem}
+.block-container {max-width:1400px;padding-top:1.3rem}
+.kpi-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:16px 0}
+.kpi-grid.three {grid-template-columns:repeat(3,minmax(0,1fr))}
+.kpi {background:#172235;border:1px solid #334155;border-radius:14px;padding:16px 18px;min-width:0}
+.kpi-label {color:#cbd5e1;font-size:.9rem;margin-bottom:12px}
+.kpi-value {color:#f8fafc;font-size:clamp(1.05rem,2vw,1.75rem);font-weight:650;overflow-wrap:anywhere;line-height:1.3;font-variant-numeric:tabular-nums}
+.kpi-value.positive {color:#70e3b0}.kpi-value.negative {color:#ff9f9f}
 /* Metric cards must remain legible even when Streamlit's theme config is missing. */
 [data-testid="stMetric"] {
   background-color:#172235 !important;
@@ -33,6 +40,8 @@ st.markdown("""<style>
 }
 @media(max-width:700px) {
   .block-container {padding:1rem .7rem 2rem}
+  .kpi-grid,.kpi-grid.three {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .kpi {padding:12px}.kpi-value {font-size:clamp(.95rem,3.8vw,1.35rem)}
   [data-testid="stMetric"] {padding:12px !important;min-height:90px}
 }
 </style>""",unsafe_allow_html=True)
@@ -45,6 +54,13 @@ def prices_cached(tickers,end): return historical_data(list(tickers),date(1990,1
 
 def krw(n): return f'{n:,.0f}원'
 def usd(n): return f'${n:,.2f}'
+
+def kpi_grid(items,three=False):
+    cards=[]
+    for label,value,tone in items:
+        tone = tone if tone in ('positive','negative') else ''
+        cards.append(f'<div class="kpi"><div class="kpi-label">{escape(label)}</div><div class="kpi-value {tone}">{escape(str(value))}</div></div>')
+    st.markdown(f'<div class="kpi-grid{" three" if three else ""}">{"".join(cards)}</div>',unsafe_allow_html=True)
 
 def money_input(label,key,default):
     if key not in st.session_state: st.session_state[key]=f'{default:,}'
@@ -171,21 +187,55 @@ try:
 except Exception as e:
     st.error(f'계산 실패: {e}');st.stop()
 format_money=krw if r['currency'].startswith('KRW') else usd
-c1,c2,c3,c4=st.columns(4)
-c1.metric('최종 평가액',format_money(m['final']))
-c2.metric('총 납입원금',format_money(m['principal']))
-c3.metric('총 손익',format_money(m['profit']))
-c4.metric('원금 대비 수익률',f'{m["roi"]*100:+.2f}%')
-c5,c6,c7=st.columns(3)
-c5.metric('시간가중 CAGR',f'{m["twr_cagr"]*100:+.2f}%' if pd.notna(m['twr_cagr']) else 'N/A')
-c6.metric('최대 낙폭 MDD',f'{m["mdd"]*100:.2f}%')
-c7.metric('누적 거래비용 (근사)',format_money(m['fees']))
+kpi_grid([
+    ('최종 평가액',format_money(m['final']),''),
+    ('총 납입원금',format_money(m['principal']),''),
+    ('총 손익',format_money(m['profit']),'positive' if m['profit']>=0 else 'negative'),
+    ('원금 대비 수익률',f'{m["roi"]*100:+.2f}%','positive' if m['roi']>=0 else 'negative'),
+])
+kpi_grid([
+    ('시간가중 CAGR',f'{m["twr_cagr"]*100:+.2f}%' if pd.notna(m['twr_cagr']) else 'N/A',''),
+    ('최대 낙폭 MDD',f'{m["mdd"]*100:.2f}%',''),
+    ('누적 거래비용 (근사)',format_money(m['fees']),''),
+],three=True)
 
 fig=go.Figure()
 fig.add_trace(go.Scatter(x=daily.index,y=daily.value,name='포트폴리오 평가액',line=dict(color='#2563eb',width=2)))
 fig.add_trace(go.Scatter(x=daily.index,y=daily.principal,name='누적 납입원금',line=dict(color='#64748b',dash='dash')))
 fig.update_layout(title='자산 성장 추이',height=430,margin=dict(l=10,r=10,t=50,b=15),hovermode='x unified',legend=dict(orientation='h'))
 st.plotly_chart(fig,use_container_width=True)
+
+st.subheader('📊 종목별 차트')
+st.caption('표시할 티커를 선택하세요. 종목마다 색상이 고정됩니다. 포트폴리오 평가액에는 종목별 보유 수량과 현금이 반영됩니다.')
+tickers=list(r['weights'])
+colors=['#60a5fa','#f59e0b','#34d399','#f472b6','#a78bfa','#22d3ee','#f87171','#a3e635','#fb923c','#c084fc']
+color_map={t:colors[i%len(colors)] for i,t in enumerate(tickers)}
+if 'chart_selected' not in st.session_state or st.session_state.get('chart_assets')!=tuple(tickers):
+    st.session_state.chart_selected=tickers.copy()
+    st.session_state.chart_assets=tuple(tickers)
+selected=st.multiselect('차트에 표시할 티커',tickers,key='chart_selected',placeholder='종목을 선택하세요')
+chart_mode=st.radio('종목별 표시 기준',['종목별 평가액','주가 수익률 비교 (시작=100)','실제 주가 (USD)'],horizontal=True)
+if selected:
+    detail=go.Figure()
+    for t in selected:
+        if chart_mode=='종목별 평가액':
+            series=daily[f'asset_{t}']; label=f'{t} 보유 평가액'; unit='원' if r['currency'].startswith('KRW') else 'USD'
+        elif chart_mode=='주가 수익률 비교 (시작=100)':
+            series=sub[t]/float(sub[t].iloc[0])*100;label=t;unit='지수'
+        else:
+            series=sub[t];label=t;unit='USD'
+        detail.add_trace(go.Scatter(x=series.index,y=series,name=label,mode='lines',line=dict(color=color_map[t],width=2),hovertemplate='%{x|%Y-%m-%d}<br>%{y:,.2f} '+unit+'<extra>'+t+'</extra>'))
+    detail.update_layout(height=440,margin=dict(l=10,r=10,t=20,b=20),hovermode='x unified',legend=dict(orientation='h',y=-.18),uirevision='ticker-chart')
+    st.plotly_chart(detail,use_container_width=True)
+    if chart_mode=='종목별 평가액':
+        st.caption('종목별 평가액은 선택한 투자 통화 기준입니다. 초기 매수·월 적립·리밸런싱·거래비용을 반영한 보유 평가액이며, 미투자 현금은 제외됩니다.')
+    elif chart_mode=='주가 수익률 비교 (시작=100)':
+        st.caption('배당·분할 수정 USD 종가를 시작일 100으로 정규화한 비교입니다. 투자금·수수료·환율 변동은 포함하지 않습니다.')
+    else:
+        st.caption('Yahoo Finance에서 조회한 종목별 USD 수정종가입니다. 배당·분할 조정치이므로 당시 실제 체결가격과 다를 수 있습니다.')
+else:
+    st.info('표시할 종목을 하나 이상 선택하세요.')
+
 
 left,right=st.columns(2)
 with left:
@@ -200,15 +250,19 @@ with right:
         st.write(f'최종 평가액 ≈ **{usd(m["final"]/last_fx)}**')
     else:
         st.write(f'최종 평가액 ≈ **{krw(m["final"]*last_fx)}**')
+    st.caption('환율은 Yahoo Finance의 KRW=X 일별 관측값을 자동 사용합니다. 주식 거래일에 환율 관측이 없으면 가장 최근 과거 관측값을 적용합니다.')
+    fx_date=st.select_slider('환산 기준일 (실제 조회된 거래일)',options=list(fx_sub.index.date),value=fx_sub.index[-1].date(),format_func=lambda d:d.strftime('%Y-%m-%d'))
+    selected_fx=float(fx_sub.loc[pd.Timestamp(fx_date)])
+    st.write(f'선택한 날짜의 1 USD = **{selected_fx:,.2f}원**')
     usd_to_convert=st.number_input('환산할 USD',min_value=0.,value=1000.,step=100.)
-    st.write(f'**{usd(usd_to_convert)} = {krw(usd_to_convert*last_fx)}**')
+    st.write(f'**{usd(usd_to_convert)} = {krw(usd_to_convert*selected_fx)}**')
 
 if r['tax']:
     # USD portfolio tax is converted at final FX only; not a legal filing computation.
     gross_profit_krw=m['profit'] if r['currency'].startswith('KRW') else m['profit']*float(fx_sub.iloc[-1])
     tax_krw=max(0,gross_profit_krw-r['deduction'])*r['tax_rate']/100
     tax_in_currency=tax_krw if r['currency'].startswith('KRW') else tax_krw/float(fx_sub.iloc[-1])
-    st.metric('최종 매도 시 세금 간이 추정 후 평가액',format_money(m['final']-tax_in_currency))
+    kpi_grid([('최종 매도 시 세금 간이 추정 후 평가액',format_money(m['final']-tax_in_currency),'')],three=True)
     st.warning('세금은 전체 손익에서 공제액을 뺀 단순 가정입니다. 연도별 실현손익·손익통산·배당원천징수·과세 환율·국가별 세법을 반영하지 않습니다. 실제 신고·투자 판단에 사용하지 마세요.')
 
 st.download_button('⬇️ 일별 백테스트 결과 CSV',daily.to_csv().encode('utf-8-sig'),file_name='backtest_lab_results.csv',mime='text/csv')
