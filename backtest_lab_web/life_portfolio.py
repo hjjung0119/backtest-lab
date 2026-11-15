@@ -11,8 +11,8 @@ AXES = {'risk':'심리적 위험 수용도','discipline':'투자 원칙 유지',
 
 def validate_profile(p: Mapping) -> list[str]:
     errors=[]
-    for key, label in [('age','나이'),('income','본인 월 실수령액'),('expenses','월 생활·고정지출'),('cash','현금성 자산'),('investments','기존 투자자산'),('debt','총 부채'),('debt_payment','월 대출상환액'),('support','월 부양비'),('goal_years','목표 기간')]:
-        try: v=float(p[key])
+    for key, label in [('age','나이'),('income','본인 월 실수령액'),('expenses','월 생활·고정지출'),('cash','현금성 자산'),('investments','기존 투자자산'),('debt','총 부채'),('debt_payment','월 대출상환액'),('support','월 부양비'),('insurance','월 보험료'),('taxes','월 별도 세금'),('irregular','월 환산 비정기 지출'),('goal_years','목표 기간')]:
+        try: v=float(p.get(key,0) if key in ("insurance","taxes","irregular") else p[key])
         except (KeyError, TypeError, ValueError):
             errors.append(f'{label}을 입력하세요.');continue
         if v < 0: errors.append(f'{label}은 음수일 수 없습니다.')
@@ -28,7 +28,7 @@ def finance_snapshot(p: Mapping) -> dict:
     errors=validate_profile(p)
     if errors:raise ValueError('; '.join(errors))
     income=float(p['income'])+float(p.get('partner_income',0))
-    outflow=float(p['expenses'])+float(p['debt_payment'])+float(p['support'])
+    outflow=sum(float(p.get(k,0)) for k in ('expenses','debt_payment','support','insurance','taxes','irregular'))
     surplus=income-outflow
     liquid=float(p['cash'])
     reserve_months=liquid/outflow if outflow>0 else None
@@ -82,3 +82,46 @@ def portfolio_candidates(profile, scores):
     return {'model':model,'constrained':constrained,'reasons':reasons,
             'examples':[{'name':name,'주식':equity,'채권':bonds,'현금성':cash} for name,equity,bonds,cash in examples],
             'monthly_surplus':snap['monthly_surplus']}
+
+
+# Reference model portfolios. All percentages are of the investable long-term sleeve,
+# AFTER segregating emergency reserves and near-term goal funds.
+# SHV is short-term US Treasury exposure, not an insured KRW deposit.
+MODEL_PORTFOLIOS = [
+    {'name':'안정 우선 ETF', 'style':'stable', 'holdings':{'VOO':20,'SCHD':10,'IEF':20,'SHV':50}, 'note':'단기 국채 ETF도 환율·가격 변동 위험이 있습니다.'},
+    {'name':'균형 분산 ETF', 'style':'balanced', 'holdings':{'VOO':40,'SCHD':15,'QQQM':10,'IEF':20,'SHV':15}, 'note':'미국 주식·채권을 혼합한 비교안입니다.'},
+    {'name':'장기 성장 ETF', 'style':'growth', 'holdings':{'VOO':45,'QQQM':30,'SCHD':15,'SHV':10}, 'note':'VOO와 QQQM의 대형 기술주 중복 노출에 주의하세요.'},
+    {'name':'인컴 중심 ETF', 'style':'income', 'holdings':{'VOO':30,'SCHD':30,'JEPI':15,'JEPQ':10,'SHV':15}, 'note':'옵션 프리미엄 분배금은 확정 수익이나 예금 이자가 아닙니다.'},
+    {'name':'버핏 90/10 참고', 'style':'growth', 'holdings':{'VOO':90,'SHV':10}, 'note':'버핏의 원칙을 ETF로 근사한 교육용 예시입니다. SHV는 단기 미국 국채 ETF이며 정확한 동일 상품은 아닙니다.'},
+    {'name':'금리 민감 분산', 'style':'balanced', 'holdings':{'VOO':40,'SCHD':15,'TLT':15,'IEF':15,'SHV':15}, 'note':'TLT는 장기채로 금리 상승 시 큰 가격 손실이 발생할 수 있습니다.'},
+]
+
+PRODUCT_WARNINGS = {
+    'QLD':'나스닥100 일일 2배 레버리지 상품으로 장기 누적 수익률이 단순 2배가 아닙니다. 기본 후보에서 제외합니다.',
+    'QQQ':'QQQM과 같은 나스닥100 지수 노출이므로 둘을 함께 보유해도 분산 효과가 제한적입니다.',
+    'QQQI':'옵션 인컴 전략은 분배금이 높아도 원금 손실 및 상승 제한 가능성이 있습니다.',
+    'O':'개별 리츠 주식으로 금리·부동산·개별기업 위험이 있어 기본 분산 ETF 모델에서 제외합니다.',
+    'JEPQ':'옵션 인컴 전략은 상승 참여가 제한될 수 있고 분배금은 보장되지 않습니다.',
+    'JEPI':'옵션 인컴 전략은 상승 참여가 제한될 수 있고 분배금은 보장되지 않습니다.',
+    'TLT':'장기 미국 국채 ETF는 금리 변화에 매우 민감하며 원화 기준 환율 위험도 있습니다.',
+}
+
+
+def product_portfolios(profile, scores):
+    """Return ranked, non-transactional ETF model comparisons with safety constraints."""
+    analysis=portfolio_candidates(profile,scores)
+    snap=finance_snapshot(profile)
+    reserve_target=6*snap['monthly_outflow']
+    reserve_gap=max(0,reserve_target-float(profile['cash']))
+    # Goals are not assumed funded: subtract them from immediately available cash.
+    available=max(0,float(profile['cash'])-reserve_target-float(profile.get('goal_amount',0)))
+    constrained=analysis['constrained'] or reserve_gap>0
+    preferred='stable' if constrained or scores['risk']<35 else ('balanced' if scores['risk']<70 else 'growth')
+    ranked=[]
+    for model in MODEL_PORTFOLIOS:
+        match = model['style']==preferred
+        ranked.append({**model,'match':match,'sum_weight':sum(model['holdings'].values())})
+    ranked.sort(key=lambda m:(not m['match'],m['name']))
+    return {'preferred':preferred,'models':ranked,'reserve_target':reserve_target,'reserve_gap':reserve_gap,
+            'cash_after_reserve_and_goal':available,'constrained':constrained,'reasons':analysis['reasons'],
+            'warnings':PRODUCT_WARNINGS}
