@@ -11,7 +11,12 @@ from search import find_tickers, CATALOG
 
 st.set_page_config(page_title='Backtest Lab | 주식 백테스팅', page_icon='📈', layout='wide', initial_sidebar_state='collapsed')
 st.markdown("""<style>
-.block-container {max-width:1400px;padding-top:1.3rem}
+.block-container {max-width:1400px;padding-top:3.5rem;padding-bottom:3rem}
+/* Prevent the home/back navigation button from being clipped by the top toolbar. */
+[data-testid="stMainBlockContainer"] {overflow:visible !important}
+[data-testid="stMainBlockContainer"] .stButton button {min-height:2.5rem;white-space:normal;overflow:visible}
+[data-testid="stMainBlockContainer"] .stButton {overflow:visible}
+
 .kpi-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:16px 0}
 .kpi-grid.three {grid-template-columns:repeat(3,minmax(0,1fr))}
 .kpi {background:#172235;border:1px solid #334155;border-radius:14px;padding:16px 18px;min-width:0}
@@ -39,7 +44,7 @@ st.markdown("""<style>
   opacity:1 !important;
 }
 @media(max-width:700px) {
-  .block-container {padding:1rem .7rem 2rem}
+  .block-container {padding:3.5rem .7rem 2rem}
   .kpi-grid,.kpi-grid.three {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
   .kpi {padding:12px}.kpi-value {font-size:clamp(.95rem,3.8vw,1.35rem)}
   [data-testid="stMetric"] {padding:12px !important;min-height:90px}
@@ -62,9 +67,14 @@ def kpi_grid(items,three=False):
         cards.append(f'<div class="kpi"><div class="kpi-label">{escape(label)}</div><div class="kpi-value {tone}">{escape(str(value))}</div></div>')
     st.markdown(f'<div class="kpi-grid{" three" if three else ""}">{"".join(cards)}</div>',unsafe_allow_html=True)
 
+def _format_money_on_commit(key):
+    raw=str(st.session_state.get(key,'')).strip()
+    if re.fullmatch(r'\d[\d,]*',raw):
+        st.session_state[key]=f"{int(raw.replace(',','')):,}"
+
 def money_input(label,key,default):
     if key not in st.session_state: st.session_state[key]=f'{default:,}'
-    s=st.text_input(label,key=key,help='숫자와 쉼표 입력 가능')
+    s=st.text_input(label,key=key,help='숫자 입력 후 Enter 또는 다른 칸 선택 시 쉼표가 자동 반영됩니다.',on_change=_format_money_on_commit,args=(key,))
     if not re.fullmatch(r'\d[\d,]*',s.strip()):
         st.error(f'{label}: 숫자만 입력해 주세요.')
         return None
@@ -110,7 +120,7 @@ if 'active_page' not in st.session_state:
 if st.session_state.active_page == '🏠 홈':
     st.title('📊 Backtest Lab')
     st.write('**투자 분석부터 인생 계획까지, 원하는 도구를 선택하세요.**')
-    st.caption('Backtest Lab v1.6 · 모든 분석은 교육용 시뮬레이션이며 투자·세무 자문이 아닙니다.')
+    st.caption('Backtest Lab v1.7 · 모든 분석은 교육용 시뮬레이션이며 투자·세무 자문이 아닙니다.')
     for i in range(0,len(MENU),2):
         cols=st.columns(2)
         for j,(name,desc) in enumerate(MENU[i:i+2]):
@@ -123,13 +133,14 @@ if st.session_state.active_page == '🏠 홈':
                         st.rerun()
     st.stop()
 section = st.session_state.active_page
-if st.button('← 전체 메뉴로 돌아가기',key='back_to_home'):
+if st.button('← 전체 메뉴로 돌아가기',key='back_to_home',use_container_width=False):
     st.session_state.active_page='🏠 홈'
     st.rerun()
 
 if section != '📈 기본 백테스트':
-    st.title(section)
-    st.caption('Backtest Lab v1.5 베타 · 시뮬레이션 결과는 투자·세무 자문이 아닙니다.')
+    if section != '🧠 Life Portfolio':
+        st.title(section)
+        st.caption('Backtest Lab v1.8 베타 · 시뮬레이션 결과는 투자·세무 자문이 아닙니다.')
     if section == '🧠 Life Portfolio':
         from life_ui import render
         render()
