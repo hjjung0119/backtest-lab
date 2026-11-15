@@ -143,12 +143,12 @@ with st.sidebar:
     apply_tax=st.checkbox('최종 매도 시 세금 간이 추정',value=False)
     if apply_tax:
         tax_rate=st.number_input('차익 세율 (%)',min_value=0.,max_value=60.,value=22.)
-        deduction=st.number_input('차익 기본공제 (원)',min_value=0,value=2_500_000,step=500_000)
+        deduction=money_input('차익 기본공제 (원)','tax_deduction_krw',2_500_000)
     else:tax_rate=22.;deduction=2_500_000
     run=st.button('🚀 실제 데이터 조회 및 분석',type='primary',use_container_width=True)
 
 if run:
-    if not weights or abs(total-100)>0.001 or initial is None or monthly is None or initial+monthly<=0:
+    if not weights or abs(total-100)>0.001 or initial is None or monthly is None or initial+monthly<=0 or (apply_tax and deduction is None):
         st.error('종목, 비중 합계 100%, 투자금을 확인하세요.')
     else:
         try:
@@ -171,10 +171,20 @@ r=st.session_state.result
 stocks,fx=r['usd_prices'],r['fx']
 first,last=stocks.index[0].date(),stocks.index[-1].date()
 st.success(f'실제 데이터 공통 구간: {first} ~ {last} · {len(stocks):,}거래일')
-st.caption('설정 변경 후에는 왼쪽 분석 버튼을 다시 눌러야 결과에 반영됩니다. 아래 시작일 변경은 즉시 계산됩니다.')
-start_default=max(first,last-timedelta(days=3652))
-start=st.date_input('백테스트 시작일 (공통 데이터 내 자유 선택)',value=start_default,min_value=first,max_value=last,key='analysis_start')
-sub=stocks.loc[stocks.index.date>=start]
+st.caption('투자 기간은 아래에서 시작일과 종료일을 설정하세요. 날짜 변경은 즉시 재계산됩니다. 종목·투자금 등 왼쪽 설정은 분석 버튼을 다시 눌러 반영합니다.')
+if st.session_state.get('analysis_period_assets') != (tuple(stocks.columns),first,last):
+    st.session_state.analysis_period_assets=(tuple(stocks.columns),first,last)
+    st.session_state.analysis_start=max(first,last-timedelta(days=3652))
+    st.session_state.analysis_end=last
+start_col,end_col=st.columns(2)
+with start_col:
+    start=st.date_input('📅 백테스트 시작일',min_value=first,max_value=last,key='analysis_start')
+with end_col:
+    analysis_end=st.date_input('📅 백테스트 종료일',min_value=first,max_value=last,key='analysis_end')
+if start>=analysis_end:
+    st.error('백테스트 종료일은 시작일보다 늦어야 합니다.');st.stop()
+st.caption(f'선택한 투자 기간: {(analysis_end-start).days/365.25:.1f}년 · {start:%Y-%m-%d} ~ {analysis_end:%Y-%m-%d}')
+sub=stocks.loc[(stocks.index.date>=start)&(stocks.index.date<=analysis_end)]
 fx_sub=fx.reindex(sub.index)
 if len(sub)<2:st.error('분석 기간에 거래일이 2일 이상 필요합니다.');st.stop()
 
@@ -250,7 +260,8 @@ with right:
         st.write(f'최종 평가액 ≈ **{usd(m["final"]/last_fx)}**')
     else:
         st.write(f'최종 평가액 ≈ **{krw(m["final"]*last_fx)}**')
-    st.caption('환율은 Yahoo Finance의 KRW=X 일별 관측값을 자동 사용합니다. 주식 거래일에 환율 관측이 없으면 가장 최근 과거 관측값을 적용합니다.')
+    st.caption('백테스트는 각 매수일·평가일의 실제 조회된 과거 환율을 자동 반영합니다(KRW 모드). 아래 날짜 선택은 별도 환산 계산기용이며 백테스트 결과를 변경하지 않습니다.')
+    st.caption('USD 투자 모드는 달러 기준 수익률을 계산하고 마지막에만 선택 종료일 환율로 원화 평가액을 보여줍니다. 실제 환전·달러 잔고·세금 신고 계산과는 다릅니다.')
     fx_date=st.select_slider('환산 기준일 (실제 조회된 거래일)',options=list(fx_sub.index.date),value=fx_sub.index[-1].date(),format_func=lambda d:d.strftime('%Y-%m-%d'))
     selected_fx=float(fx_sub.loc[pd.Timestamp(fx_date)])
     st.write(f'선택한 날짜의 1 USD = **{selected_fx:,.2f}원**')
@@ -269,8 +280,8 @@ st.download_button('⬇️ 일별 백테스트 결과 CSV',daily.to_csv().encode
 with st.expander('데이터·계산 방식 및 한계'):
     st.markdown('''- **출처:** Yahoo Finance (`yfinance`). 주식은 배당·분할 수정종가(`auto_adjust=True`), 환율은 `KRW=X` 일별 종가를 사용합니다. 수정종가는 배당 재투자에 대한 근사치입니다.
 - **공통 기간:** 모든 선택 종목과 환율의 유효한 공통 거래일만 사용합니다. 환율은 과거 관측치만 전방 채움합니다.
-- **매수:** 최초 거래일에 초기 투자금을 매수하고, 이후 각 달의 첫 공통 거래일에 월 적립금을 매수합니다. 소수점 주식 허용, 매수·매도 비용 근사.
-- **통화:** KRW 분석은 일별 수정종가 × 당시 원/달러 환율, USD 분석은 USD 수정종가를 사용합니다. 환전 비용은 매매 비용에 단순 합산하므로 실제 환전 시점과 차이가 있습니다.
+- **매수:** 최초 거래일에 초기 투자금을 매수하고, 이후 각 달의 첫 공통 거래일에 월 적립금을 매수합니다. 소수점 주식 허용, 매수·매도 비용 근사. 분석 종료일의 평가액은 시가평가이며 자동 전량 매도는 하지 않습니다.
+- **통화:** KRW 분석은 최초 매수와 매월 매수, 일별 평가·최종 평가에 각각 해당 거래일의 USD 수정종가 × 과거 USD/KRW 환율을 적용합니다. USD 분석은 USD 수정종가를 사용하며 원화 표시만 종료일 환율로 환산합니다. 실제 환전 주문, 달러 현금 보유, 매도 후 환전 시점을 추적하지 않습니다. 환전 비용은 매매 비용에 단순 합산하므로 실제 거래와 차이가 있습니다.
 - **리밸런싱:** 월별·연별 첫 거래일에 전체 매도 후 재매수하는 근사 방식입니다.
 - **수익률:** 원금 대비 수익률과 시간가중 CAGR은 서로 다릅니다. MDD는 현금 유입을 제거한 전략 지수를 사용합니다.
 - **제약:** 미국 거래소 USD 자산 중심. 한국 주식, 전 세계 거래소, 거래세·배당원천징수의 정밀 계산, 벤치마크·복수 시나리오 동시 비교는 후속 개발 대상입니다.
