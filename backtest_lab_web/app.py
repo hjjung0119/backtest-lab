@@ -97,6 +97,95 @@ def remove_asset(t):
     st.session_state.pop(f'w_{t}',None)
     st.session_state.pop('result',None)
 
+
+# New functional planning tools. Existing backtest remains unchanged when selected.
+section = st.sidebar.radio('🧭 분석 메뉴', ['📈 기본 백테스트','🧾 해외주식 세금 시나리오','⚖️ 리밸런싱 실행표','🎯 목표 자금 시뮬레이터','🧠 Life Portfolio'],key='v14_section')
+if section != '📈 기본 백테스트':
+    st.title(section)
+    st.caption('Backtest Lab v1.5 베타 · 시뮬레이션 결과는 투자·세무 자문이 아닙니다.')
+    if section == '🧠 Life Portfolio':
+        from life_ui import render
+        render()
+    elif section == '🧾 해외주식 세금 시나리오':
+        st.info('해외주식의 동일 과세연도 실현손익과 기본공제를 가정한 단순 비교입니다. 실제 신고 세액을 확정하지 않습니다.')
+        st.write('**매수 내역** · 날짜, 주식 수량, 당시 USD 매수가를 입력하세요. 원/달러 환율은 자동 조회합니다.')
+        default_lots=pd.DataFrame([{'매수일':date(2020,1,2),'수량':10.0,'매수가(USD)':100.0},
+                                   {'매수일':date(2022,1,3),'수량':5.0,'매수가(USD)':150.0}])
+        edited=st.data_editor(default_lots,num_rows='dynamic',hide_index=True,use_container_width=True,key='tax_lots')
+        c1,c2=st.columns(2)
+        with c1:
+            sell_date=st.date_input('매도 예정일 / 환율 조회일',date.today(),max_value=date.today(),key='tax_sell_date')
+            sell_usd=st.number_input('예상 매도가 (USD/주)',min_value=0.01,value=200.0,step=1.0)
+            fee_pct=st.number_input('매수·매도 수수료 (편도 %)',min_value=0.,max_value=5.,value=0.05,step=0.05,key='tax_fee')
+        with c2:
+            deduction_tax=money_input('연간 기본공제 가정 (원)','tax_v14_deduction',2_500_000)
+            prior=st.text_input('올해 다른 해외주식 실현손익 (원)',value='0',help='손실이면 - 기호 입력')
+            tax_pct=st.number_input('적용 세율 가정 (%)',min_value=0.,max_value=60.,value=22.,step=1.)
+        st.caption('실제 매도 체결가·환율은 미래에 확정되므로 예상 매도가는 직접 입력합니다. 과거 매수 환율과 매도일 관측 환율은 자동 조회합니다.')
+        if st.button('🧮 세금 시나리오 계산',type='primary',key='tax_go'):
+            try:
+                from data import close_series
+                from planning import fx_asof,tax_scenarios
+                if edited.empty or deduction_tax is None: raise ValueError('매수 내역과 공제액을 입력하세요.')
+                if not re.fullmatch(r'-?[\d,]+',prior.strip()):raise ValueError('다른 실현손익은 정수로 입력하세요.')
+                lots=[{'buy_date':pd.Timestamp(row['매수일']).date(),'shares':float(row['수량']),
+                       'buy_price_usd':float(row['매수가(USD)'])} for _,row in edited.iterrows()]
+                earliest=min(x['buy_date'] for x in lots)
+                if earliest>sell_date:raise ValueError('매수일이 매도일보다 늦습니다.')
+                with st.spinner('과거 USD/KRW 환율 조회 중...'):
+                    fx_history=close_series('KRW=X',earliest-timedelta(days=15),sell_date)
+                rates=fx_asof([x['buy_date'] for x in lots]+[sell_date],fx_history)
+                df=tax_scenarios(lots,sell_date,sell_usd,rates[:-1],rates[-1],fee_rate=fee_pct/100,
+                                 deduction=deduction_tax,tax_rate=tax_pct/100,
+                                 other_realized_krw=int(prior.replace(',','')))
+                st.success(f'매도일 적용 환율: 1 USD ≈ {rates[-1]:,.2f}원 (해당 날짜 또는 직전 관측치)')
+                st.dataframe(df.style.format({c:'{:,.0f}' for c in df.columns if c not in ('매도 비율',)}),use_container_width=True,hide_index=True)
+                st.download_button('⬇️ 시나리오 CSV 저장',df.to_csv(index=False).encode('utf-8-sig'),'tax_scenarios.csv','text/csv')
+                st.warning('매도 비율은 모든 매수 로트에 동일하게 적용합니다. 실제 매도 순서·증권사별 취득가액 산정·환율 적용 기준·해외주식 과세 요건·신고 세액과 차이가 있습니다. 다른 실현손익 입력값을 기준으로 이번 매도에 따른 세액 변화만 추정하며, 손실 발생 시 음수 세액이 표시될 수 있습니다.')
+            except Exception as e:st.error(f'계산 실패: {e}')
+    elif section == '⚖️ 리밸런싱 실행표':
+        st.info('현재 보유수량·현재가·목표 비중을 입력하면 매수·매도 수량을 계산합니다. 시세 자동 조회와 증권사 주문은 연결되지 않았습니다.')
+        default_holdings=pd.DataFrame([{'티커':'VOO','보유 수량':10.,'현재가 (USD)':500.,'목표 비중 (%)':40.},
+                                       {'티커':'QQQ','보유 수량':5.,'현재가 (USD)':600.,'목표 비중 (%)':40.},
+                                       {'티커':'SCHD','보유 수량':40.,'현재가 (USD)':30.,'목표 비중 (%)':20.}])
+        edited=st.data_editor(default_holdings,num_rows='dynamic',hide_index=True,use_container_width=True,key='rebalance_table')
+        cash=st.number_input('현재 달러 현금 잔고 (USD)',min_value=0.,value=0.,step=100.)
+        fee=st.number_input('거래 수수료 가정 (%)',min_value=0.,max_value=5.,value=0.05,step=0.05,key='rebalance_fee')
+        if st.button('⚖️ 거래 수량 계산',type='primary'):
+            try:
+                from planning import rebalance_orders
+                if edited.empty:raise ValueError('종목을 입력하세요.')
+                ts=[str(t).strip().upper() for t in edited['티커']]
+                if len(set(ts))!=len(ts):raise ValueError('티커가 중복됩니다.')
+                result=rebalance_orders(dict(zip(ts,edited['보유 수량'].astype(float))),
+                                        dict(zip(ts,edited['목표 비중 (%)'].astype(float)/100)),
+                                        dict(zip(ts,edited['현재가 (USD)'].astype(float))),cash=cash,fee_rate=fee/100)
+                st.dataframe(result.style.format({'현재 비중':'{:.1%}','목표 비중':'{:.1%}',
+                                                  '거래 수량(소수점 허용)':'{:,.4f}','거래 금액':'${:,.2f}',
+                                                  '예상 수수료':'${:,.2f}'}),hide_index=True,use_container_width=True)
+                st.download_button('⬇️ 거래표 CSV 저장',result.to_csv(index=False).encode('utf-8-sig'),'rebalance_orders.csv','text/csv')
+                st.caption('수수료 차감 전 목표 수량에 대한 근사치이며, 세금·환율·정수주식 제약·실제 체결·매매 가능 현금 검증은 제외됩니다.')
+            except Exception as e:st.error(f'계산 실패: {e}')
+    else:
+        st.info('미래 수익률을 예측하지 않고, 여러 고정 수익률 가정에서 목표 금액에 도달하는지 비교합니다.')
+        a,b=st.columns(2)
+        with a:
+            goal_initial=money_input('현재 투자 가능 금액 (원)','goal_initial',10_000_000)
+            goal_monthly=money_input('매월 추가 투자금 (원)','goal_monthly',500_000)
+        with b:
+            goal_target=money_input('목표 금액 (원)','goal_target',100_000_000)
+            years=st.number_input('목표까지 남은 기간 (년)',min_value=1,max_value=50,value=10)
+        if st.button('🎯 목표 달성 시나리오 계산',type='primary'):
+            try:
+                from planning import goal_scenarios
+                if None in (goal_initial,goal_monthly,goal_target):raise ValueError('금액을 확인하세요.')
+                df=goal_scenarios(goal_initial,goal_monthly,years,goal_target)
+                st.dataframe(df.style.format({'기간 종료 자산':'{:,.0f}원','목표 대비 차이':'{:+,.0f}원'}),use_container_width=True,hide_index=True)
+                st.download_button('⬇️ 목표 시나리오 CSV 저장',df.to_csv(index=False).encode('utf-8-sig'),'goal_scenarios.csv','text/csv')
+                st.caption('수익률은 연중 일정하다고 가정합니다. 실제 변동성·손실 확률·물가·세금·수수료는 반영되지 않으며 목표 달성 확률을 의미하지 않습니다.')
+            except Exception as e:st.error(f'계산 실패: {e}')
+    st.stop()
+
 if 'assets' not in st.session_state: st.session_state.assets=['VOO','QQQ','SCHD']
 for t,w in [('VOO',40.),('QQQ',40.),('SCHD',20.)]:
     st.session_state.setdefault(f'w_{t}',w)
