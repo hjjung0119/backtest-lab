@@ -66,10 +66,10 @@ def backtest(prices, weights, initial_krw, monthly_krw, rebalance='none', fee_bp
         units += allocation / current
         cash -= float(allocation.sum()) + buy_fee
         value = float(np.dot(units, current) + cash)
-        rows.append((dt, value, paid, cash, contribution, fee_total))
+        rows.append((dt, value, paid, cash, contribution, fee_total, *list(units * current)))
         flows.append((dt, contribution))
         last_month, last_period = month, period
-    result = pd.DataFrame(rows, columns=['date','value','principal','cash','contribution','cumulative_fees']).set_index('date')
+    result = pd.DataFrame(rows, columns=['date','value','principal','cash','contribution','cumulative_fees'] + [f'asset_{t}' for t in tickers]).set_index('date')
     # Daily time-weighted return excludes external deposits at session start.
     prev_value = result.value.shift(1)
     daily_returns = ((result.value - result.contribution) / prev_value - 1).iloc[1:]
