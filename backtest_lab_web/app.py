@@ -9,7 +9,7 @@ from data import historical_data
 from engine import backtest, common_date_timing
 from search import find_tickers, CATALOG
 
-st.set_page_config(page_title='Backtest Lab | 주식 백테스팅', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
+st.set_page_config(page_title='Backtest Lab | 주식 백테스팅', page_icon='📈', layout='wide', initial_sidebar_state='collapsed')
 st.markdown("""<style>
 .block-container {max-width:1400px;padding-top:1.3rem}
 .kpi-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:16px 0}
@@ -99,7 +99,34 @@ def remove_asset(t):
 
 
 # New functional planning tools. Existing backtest remains unchanged when selected.
-section = st.sidebar.radio('🧭 분석 메뉴', ['📈 기본 백테스트','🧾 해외주식 세금 시나리오','⚖️ 리밸런싱 실행표','🎯 목표 자금 시뮬레이터','🧠 Life Portfolio'],key='v14_section')
+MENU = [
+ ('📈 기본 백테스트','실제 과거 주가·환율로 포트폴리오 분석'),
+ ('🧾 해외주식 세금 시나리오','매도 비율에 따른 실현손익·간이 세금 비교'),
+ ('⚖️ 리밸런싱 실행표','현재 보유 비중을 목표 비중으로 바꿀 매매 수량 계산'),
+ ('🎯 목표 자금 시뮬레이터','월 적립액·목표 시점별 예상 자금 비교'),
+ ('🧠 Life Portfolio','재무정보와 투자 심리검사를 분리한 맞춤형 자산배분 후보')]
+if 'active_page' not in st.session_state:
+    st.session_state.active_page = '🏠 홈'
+if st.session_state.active_page == '🏠 홈':
+    st.title('📊 Backtest Lab')
+    st.write('**투자 분석부터 인생 계획까지, 원하는 도구를 선택하세요.**')
+    st.caption('Backtest Lab v1.6 · 모든 분석은 교육용 시뮬레이션이며 투자·세무 자문이 아닙니다.')
+    for i in range(0,len(MENU),2):
+        cols=st.columns(2)
+        for j,(name,desc) in enumerate(MENU[i:i+2]):
+            with cols[j]:
+                with st.container(border=True):
+                    st.subheader(name)
+                    st.write(desc)
+                    if st.button('이 기능 시작하기',key=f'home_{i+j}',use_container_width=True,type='primary'):
+                        st.session_state.active_page=name
+                        st.rerun()
+    st.stop()
+section = st.session_state.active_page
+if st.button('← 전체 메뉴로 돌아가기',key='back_to_home'):
+    st.session_state.active_page='🏠 홈'
+    st.rerun()
+
 if section != '📈 기본 백테스트':
     st.title(section)
     st.caption('Backtest Lab v1.5 베타 · 시뮬레이션 결과는 투자·세무 자문이 아닙니다.')
@@ -144,17 +171,17 @@ if section != '📈 기본 백테스트':
                 st.warning('매도 비율은 모든 매수 로트에 동일하게 적용합니다. 실제 매도 순서·증권사별 취득가액 산정·환율 적용 기준·해외주식 과세 요건·신고 세액과 차이가 있습니다. 다른 실현손익 입력값을 기준으로 이번 매도에 따른 세액 변화만 추정하며, 손실 발생 시 음수 세액이 표시될 수 있습니다.')
             except Exception as e:st.error(f'계산 실패: {e}')
     elif section == '⚖️ 리밸런싱 실행표':
-        st.info('현재 보유수량·현재가·목표 비중을 입력하면 매수·매도 수량을 계산합니다. 시세 자동 조회와 증권사 주문은 연결되지 않았습니다.')
+        st.info('예: VOO가 70%, QQQ가 30%인데 목표를 50%씩으로 정하면, VOO를 얼마나 팔고 QQQ를 얼마나 살지 계산합니다. 현재가·보유수량·목표 비중을 직접 입력하며 주문은 실행하지 않습니다.')
         default_holdings=pd.DataFrame([{'티커':'VOO','보유 수량':10.,'현재가 (USD)':500.,'목표 비중 (%)':40.},
                                        {'티커':'QQQ','보유 수량':5.,'현재가 (USD)':600.,'목표 비중 (%)':40.},
                                        {'티커':'SCHD','보유 수량':40.,'현재가 (USD)':30.,'목표 비중 (%)':20.}])
         edited=st.data_editor(default_holdings,num_rows='dynamic',hide_index=True,use_container_width=True,key='rebalance_table')
-        cash=st.number_input('현재 달러 현금 잔고 (USD)',min_value=0.,value=0.,step=100.)
+        cash=money_input('현재 달러 현금 잔고 (USD)','rebalance_cash',0)
         fee=st.number_input('거래 수수료 가정 (%)',min_value=0.,max_value=5.,value=0.05,step=0.05,key='rebalance_fee')
         if st.button('⚖️ 거래 수량 계산',type='primary'):
             try:
                 from planning import rebalance_orders
-                if edited.empty:raise ValueError('종목을 입력하세요.')
+                if edited.empty or cash is None:raise ValueError('종목과 현금 잔고를 확인하세요.')
                 ts=[str(t).strip().upper() for t in edited['티커']]
                 if len(set(ts))!=len(ts):raise ValueError('티커가 중복됩니다.')
                 result=rebalance_orders(dict(zip(ts,edited['보유 수량'].astype(float))),
@@ -252,7 +279,7 @@ if run:
 
 if 'result' not in st.session_state:
     st.subheader('시작하기')
-    st.write('왼쪽에서 종목과 비중을 선택하고 **실제 데이터 조회 및 분석**을 누르세요. 조회한 실제 공통 기간 내에서 시작일을 자유롭게 선택할 수 있습니다.')
+    st.write('왼쪽 설정 패널에서 종목과 비중을 선택하고 **실제 데이터 조회 및 분석**을 누르세요. 조회한 실제 공통 기간 내에서 시작일을 자유롭게 선택할 수 있습니다.')
     st.info('기본 포트폴리오: VOO 40% · QQQ 40% · SCHD 20% / 초기 1,000만 원 / 월 50만 원')
     st.stop()
 
